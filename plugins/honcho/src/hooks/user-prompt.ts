@@ -1,5 +1,5 @@
 import { Honcho } from "@honcho-ai/sdk";
-import { loadConfig, getSessionName, getHonchoClientOptions, isPluginEnabled, getCachedStdin, getObservationMode, readsAsUnified } from "../config.js";
+import { loadConfig, getSessionName, getHonchoClientOptions, isPluginEnabled, getCachedStdin, getObservationMode, readsAsUnified, getEndpointInfo } from "../config.js";
 import {
   getCachedUserContext,
   getStaleCachedUserContext,
@@ -145,7 +145,12 @@ export async function handleUserPrompt(): Promise<void> {
   // Track message count for threshold-based refresh
   const messageCountBefore = getMessageCount();
   incrementMessageCount();
-  const shouldShowSessionLink = messageCountBefore === 0;
+  // Only surface the app.honcho.dev session link when actually pointed at the
+  // hosted platform — for self-hosted ("local") or custom-baseUrl deployments
+  // the GUI at app.honcho.dev has no access to the user's data and the link
+  // would land on an empty workspace.
+  const shouldShowSessionLink =
+    messageCountBefore === 0 && getEndpointInfo(config).type === "production";
 
   // Build session link lazily — only materialized on first message
   const sessionLink = shouldShowSessionLink
