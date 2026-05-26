@@ -1,5 +1,5 @@
 import { Honcho } from "@honcho-ai/sdk";
-import { loadConfig, getSessionForPath, getSessionName, getHonchoClientOptions, isPluginEnabled, getCachedStdin, getObservationMode } from "../config.js";
+import { loadConfig, getSessionForPath, getSessionName, getHonchoClientOptions, isPluginEnabled, getCachedStdin, getObservationMode, readsAsUnified } from "../config.js";
 import { Spinner } from "../spinner.js";
 import { logHook, logApiCall, setLogContext } from "../log.js";
 import { formatVerboseBlock, formatVerboseList } from "../visual.js";
@@ -124,29 +124,29 @@ export async function handlePreCompact(): Promise<void> {
     const honcho = new Honcho(getHonchoClientOptions(config));
     const sessionName = getSessionName(cwd);
     const observationMode = getObservationMode(config);
+    const useSelfSpineRead = readsAsUnified(observationMode);
 
     // Get session and peers using new fluent API
     const session = await honcho.session(sessionName);
     const userPeer = await honcho.peer(config.peerName);
     const aiPeer = await honcho.peer(config.aiPeer);
 
-    // unified: user self-observations — query via userPeer.
-    // directional: ai cross-observations — query via aiPeer with target.
-    const contextPeer = observationMode === "unified" ? userPeer : aiPeer;
-    const contextTarget = observationMode === "unified" ? undefined : config.peerName;
-    const contextLabel = observationMode === "unified" ? "userPeer.context()" : `aiPeer.context(target=${config.peerName})`;
+    // unified & hybrid: query the self-spine; directional: per-agent lens with target.
+    const contextPeer = useSelfSpineRead ? userPeer : aiPeer;
+    const contextTarget = useSelfSpineRead ? undefined : config.peerName;
+    const contextLabel = useSelfSpineRead ? "userPeer.context()" : `aiPeer.context(target=${config.peerName})`;
 
     if (trigger === "auto") {
       spinner.update("fetching memory context");
     }
 
-    logApiCall(contextLabel, "GET", observationMode === "unified" ? "self" : `target=${config.peerName}`);
+    logApiCall(contextLabel, "GET", useSelfSpineRead ? "self" : `target=${config.peerName}`);
     logApiCall("session.summaries", "GET", sessionName);
     logApiCall("peer.chat", "POST", "dialectic queries x2");
 
     // Fetch ALL context in parallel - this is the RIGHT time for expensive calls
     // because the context is about to be reset anyway
-    const dialecticArgs = observationMode === "unified"
+    const dialecticArgs = useSelfSpineRead
       ? { session, reasoningLevel: config.reasoningLevel ?? "low" }
       : { target: config.peerName, session, reasoningLevel: config.reasoningLevel ?? "low" };
 
