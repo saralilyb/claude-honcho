@@ -1,5 +1,5 @@
 import { Honcho } from "@honcho-ai/sdk";
-import { loadConfig, getSessionName, getHonchoClientOptions, isPluginEnabled, getCachedStdin, getObservationMode } from "../config.js";
+import { loadConfig, getSessionName, getHonchoClientOptions, isPluginEnabled, getCachedStdin, getObservationMode, readsAsUnified } from "../config.js";
 import {
   getCachedUserContext,
   getStaleCachedUserContext,
@@ -222,14 +222,14 @@ function serveContext(
 
 async function fetchFreshContext(config: any, prompt: string, honcho: Honcho): Promise<{ context: any }> {
   const observationMode = getObservationMode(config);
+  const useSelfSpineRead = readsAsUnified(observationMode);
 
-  // unified: user self-observations — query via userPeer (no target).
-  // directional: ai cross-observations — query via aiPeer with target.
-  const contextPeer = observationMode === "unified"
+  // unified & hybrid: query the self-spine; directional: per-agent lens with target.
+  const contextPeer = useSelfSpineRead
     ? await honcho.peer(config.peerName)
     : await honcho.peer(config.aiPeer);
-  const contextTarget = observationMode === "unified" ? undefined : config.peerName;
-  const contextLabel = observationMode === "unified" ? "userPeer.context" : "aiPeer.context";
+  const contextTarget = useSelfSpineRead ? undefined : config.peerName;
+  const contextLabel = useSelfSpineRead ? "userPeer.context" : "aiPeer.context";
 
   const startTime = Date.now();
 

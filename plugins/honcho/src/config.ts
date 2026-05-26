@@ -55,7 +55,7 @@ const HONCHO_BASE_URLS = {
 
 export type HonchoHost = "cursor" | "claude_code" | "obsidian";
 
-export type ObservationMode = "unified" | "directional";
+export type ObservationMode = "unified" | "directional" | "hybrid";
 
 export interface HostConfig {
   /** Honcho workspace name for this host */
@@ -75,6 +75,9 @@ export interface HostConfig {
    * Observation mode (default: "unified").
    * "unified": all agents write to user's self-observation collection (observer=user, observed=user).
    * "directional": this AI keeps its own view of the user (observer=aiPeer, observed=user).
+   * "hybrid": writes go directional (aiPeer keeps its lens) but reads/conclusions use the
+   *           self-spine (observer=user, observed=user) — coherent shared reads with preserved
+   *           per-agent storage for cross-perspective queries.
    */
   observationMode?: ObservationMode;
   messageUpload?: MessageUploadConfig;
@@ -717,6 +720,16 @@ const VALID_ENVIRONMENTS = new Set<HonchoEnvironment>(["production", "local"]);
 /** Returns the resolved observation mode, defaulting to "unified". */
 export function getObservationMode(config: HonchoCLAUDEConfig): ObservationMode {
   return config.observationMode ?? "unified";
+}
+
+/** True when reads should pull from the user's self-spine (unified semantics). */
+export function readsAsUnified(mode: ObservationMode): boolean {
+  return mode === "unified" || mode === "hybrid";
+}
+
+/** True when writes/observations should accumulate per-agent (directional semantics). */
+export function writesAsDirectional(mode: ObservationMode): boolean {
+  return mode === "directional" || mode === "hybrid";
 }
 
 export function setEndpoint(environment?: HonchoEnvironment, baseUrl?: string): void {
