@@ -4,6 +4,10 @@ All notable changes to claude-honcho will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Per-host `apiKey` field in `hosts.<name>` — takes precedence over root `apiKey`, still overridden by `HONCHO_API_KEY` env var. Lets different integrations authenticate against different Honcho orgs from one config file.
+
 ### Changed
 
 - User prompts are now written to Honcho in real time on `UserPromptSubmit` instead of being queued for `SessionEnd` flush. Mirrors the existing fire-and-forget pattern used by `PostToolUse` and `Stop`.
