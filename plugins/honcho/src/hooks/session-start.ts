@@ -1,5 +1,5 @@
 import { Honcho } from "@honcho-ai/sdk";
-import { loadConfig, getSessionForPath, setSessionForPath, getSessionName, getHonchoClientOptions, isPluginEnabled, getCachedStdin, getObservationMode } from "../config.js";
+import { loadConfig, getSessionForPath, setSessionForPath, getSessionName, getHonchoClientOptions, isPluginEnabled, getCachedStdin, getObservationMode, readsAsUnified, writesAsDirectional } from "../config.js";
 import {
   setCachedUserContext,
   setCachedSessionId,
@@ -110,7 +110,7 @@ export async function handleSessionStart(): Promise<void> {
     // configure them via API or on app.honcho.dev. We only override observeOthers
     // for the AI peer in directional mode so it can observe the user.
     const observationMode = getObservationMode(config);
-    const peers: Parameters<typeof session.addPeers>[0] = observationMode === "directional"
+    const peers: Parameters<typeof session.addPeers>[0] = writesAsDirectional(observationMode)
       ? [userPeer, [aiPeer, { observeOthers: true }]]
       : [userPeer, aiPeer];
     await session.addPeers(peers);
@@ -162,18 +162,18 @@ export async function handleSessionStart(): Promise<void> {
     const fetchStart = Date.now();
     const dialecticLevel = config.reasoningLevel ?? "low";
 
-    // unified: user observes self — use userPeer, no target.
-    // directional: aiPeer observes user — use aiPeer with target.
-    const contextLabel = observationMode === "unified" ? "userPeer.context()" : "aiPeer.context(target=user)";
+    // Reads use the self-spine in unified & hybrid; directional reads per-agent lens.
+    const useSelfSpineRead = readsAsUnified(observationMode);
+    const contextLabel = useSelfSpineRead ? "userPeer.context()" : "aiPeer.context(target=user)";
     const [userContextResult] = await Promise.allSettled([
-      observationMode === "unified"
+      useSelfSpineRead
         ? userPeer.context({ maxConclusions: 25, includeMostFrequent: true })
         : aiPeer.context({ target: config.peerName, maxConclusions: 25, includeMostFrequent: true }),
     ]);
 
     // Dialectic: fire-and-forget. Results feed the knowledge graph;
     // we don't need them for cache or display.
-    if (observationMode === "unified") {
+    if (useSelfSpineRead) {
       userPeer.chat(
         `Summarize what you know about ${config.peerName}. Focus on preferences, current projects, and working style.${branchContext}${featureHint}`,
         { session, reasoningLevel: dialecticLevel }

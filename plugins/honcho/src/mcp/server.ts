@@ -24,6 +24,7 @@ import {
   type HonchoEnvironment,
   type ObservationMode,
   getObservationMode,
+  readsAsUnified,
 } from "../config.js";
 import { honchoSessionUrl } from "../styles.js";
 import {
@@ -768,14 +769,15 @@ export async function runMcpServer(): Promise<void> {
     try {
       const session = await honcho.session(sessionName);
       const observationMode = getObservationMode(config);
+      const useSelfSpineRead = readsAsUnified(observationMode);
 
-      // unified: user observes self — all ops go through userPeer.
+      // unified & hybrid: reads come from the self-spine — all ops go through userPeer.
       // directional: aiPeer observes user — ops use aiPeer with target.
       const userPeer = await honcho.peer(config.peerName);
-      const aiPeer = observationMode === "directional" ? await honcho.peer(config.aiPeer) : null;
-      const activePeer = observationMode === "unified" ? userPeer : aiPeer!;
-      const chatTarget = observationMode === "unified" ? undefined : config.peerName;
-      const contextTarget = observationMode === "unified" ? undefined : config.peerName;
+      const aiPeer = !useSelfSpineRead ? await honcho.peer(config.aiPeer) : null;
+      const activePeer = useSelfSpineRead ? userPeer : aiPeer!;
+      const chatTarget = useSelfSpineRead ? undefined : config.peerName;
+      const contextTarget = useSelfSpineRead ? undefined : config.peerName;
 
       switch (name) {
         case "search": {
