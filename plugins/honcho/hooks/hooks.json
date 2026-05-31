@@ -13,17 +13,6 @@
         ]
       }
     ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "PATH=$HOME/.bun/bin:$PATH bun run ${CLAUDE_PLUGIN_ROOT}/hooks/session-end.ts",
-            "timeout": 30000
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit|Bash|Task",
