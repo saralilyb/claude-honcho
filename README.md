@@ -8,6 +8,8 @@
 
 A plugin marketplace for Claude Code, powered by [Honcho](https://honcho.dev) from Plastic Labs.
 
+> **This is `saralilyb`'s fork**, customized and tracking [`plastic-labs/claude-honcho`](https://github.com/plastic-labs/claude-honcho) upstream. See [Fork notes](#fork-notes-saralilyb) at the bottom for what diverges, the local Honcho topology, and how to sync.
+
 ## Plugins
 
 | Plugin                               | Description                                     |
@@ -557,3 +559,64 @@ MIT — see [LICENSE](LICENSE)
 - **Honcho**: [honcho.dev](https://honcho.dev) — The memory API
 - **Documentation**: [docs.honcho.dev](https://docs.honcho.dev)
 - **Blog**: [Read about Honcho, Agents, and Memory](https://blog.plasticlabs.ai)
+
+---
+
+## Fork notes (saralilyb)
+
+This fork is maintained by `saralilyb` and tracks `plastic-labs/claude-honcho`
+upstream. It carries a handful of local patches on top of `upstream/main`.
+**Keep this section current whenever the setup or divergence changes.**
+
+### Current state
+
+- **Plugin version:** `0.2.7` (local; upstream's last release on this line was 0.2.5).
+- **Active hooks:** `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PreCompact`,
+  `Stop`. There is **no `SessionEnd` hook** (removed — see below).
+- **Honcho topology:** Honcho is **not** self-hosted on the laptop. It runs on a
+  server on the tailnet; `endpoint.baseUrl = http://localhost:8000/v3` is a local
+  proxy hop to that host. Every Honcho call crosses the tailnet.
+- **Persistence model:** all memory is written to Honcho in **real time** — the
+  `UserPromptSubmit` hook uploads each prompt, the `Stop` hook uploads each
+  assistant turn. Uploads are best-effort (`maxRetries: 0`, no local queue): if
+  the tailnet hop is unreachable, that message is dropped, not retried. Acceptable
+  because the link to the Honcho host is reliable in practice.
+- **Local config** (`~/.honcho/config.json`): workspace `Iris`, peer `Sara`,
+  AI peer `claude`, `observationMode: directional`.
+
+### Local patches (on top of `upstream/main`)
+
+| Commit subject | What it does |
+| --- | --- |
+| `feat(observation-mode): add 'hybrid' mode` | Adds a third `observationMode` (`hybrid`): directional writes, self-spine reads. **Available but not currently active** — config uses `directional`. |
+| `fix(plugin): make bun PATH robust across launch contexts` | Prefixes hook commands with `PATH=$HOME/.bun/bin:$PATH` and wraps the MCP server in `/bin/sh -c "exec $HOME/.bun/bin/bun …"`, so the plugin works regardless of how the launching shell exported `PATH` (the installer only seeds `~/.zshrc`; Sara runs ksh). |
+| `fix(user-prompt): suppress session link for self-hosted deployments` | Only shows the `app.honcho.dev` session link when `endpoint.type === "production"`. For this self-hosted setup the hosted GUI can't see the data, so the link is hidden. |
+| `fix(session-end)` → `chore(session-end): remove the SessionEnd hook entirely` | The original `SessionEnd` hook flushed messages + ran a ~1.1s cooldown while trapping `SIGTERM`. On `prompt_input_exit` Claude Code hard-kills the hook before the upload's first round trip → `SessionEnd hook … failed: Hook cancelled`, and on the rare success it duplicated messages the `Stop` hook had already saved. Since real-time uploads cover persistence, `SessionEnd` was first made local-only, then removed outright for zero teardown surface. **Do not reinstate a network flush at session end.** |
+
+### Syncing with upstream
+
+`main` is the living branch and tracks `origin/main`. To pull upstream changes:
+
+```sh
+git fetch upstream
+git rebase upstream/main          # replays the local patches on top
+# resolve conflicts (the SessionEnd removal and observation-mode helpers
+# are the likely flashpoints), then:
+git push --force-with-lease origin main
+```
+
+The rebase-on-top model means each sync ends in a force-push — expected, not a
+mistake. After syncing, **bump the version** in `plugins/honcho/.claude-plugin/plugin.json`
+and `.claude-plugin/marketplace.json`, then deploy.
+
+### Deploying a change locally
+
+The plugin is installed as a directory-source marketplace pointing at this repo.
+Claude Code pins a **cache snapshot** keyed on the plugin version, so a code change
+only goes live after a version bump **and** a plugin update — `/reload-plugins`
+alone re-reads the *existing* cached version and will not pick up new code:
+
+```
+/plugin            # detects the bumped version, re-snapshots into the cache
+/reload-plugins    # applies it to the running session
+```
