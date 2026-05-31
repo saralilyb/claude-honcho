@@ -1,15 +1,12 @@
-import { Honcho } from "@honcho-ai/sdk";
-import { loadConfig, getSessionName, getHonchoClientOptions, isPluginEnabled, getCachedStdin } from "../config.js";
+import { loadConfig, getSessionName, isPluginEnabled, getCachedStdin } from "../config.js";
 import { existsSync, readFileSync } from "fs";
 import {
   generateClaudeSummary,
   saveClaudeLocalContext,
   loadClaudeLocalContext,
   getInstanceIdForCwd,
-  chunkContent,
 } from "../cache.js";
-import { playCooldown } from "../spinner.js";
-import { logHook, logApiCall, setLogContext } from "../log.js";
+import { logHook, setLogContext } from "../log.js";
 
 
 interface HookInput {
@@ -165,12 +162,21 @@ function extractWorkItems(assistantMessages: string[]): string[] {
 }
 
 /**
- * SessionEnd hook — structured for resilience against cancellation.
+ * SessionEnd hook — local-only, by design.
  *
- * Priority order (most critical first):
- *   1. Local summary (instant, zero risk — survives any cancellation)
- *   2. Parallel: cooldown animation + API uploads (critical data first)
- *   3. Session end marker (nice-to-have metadata)
+ * Assistant prose is uploaded turn-by-turn by the Stop hook, and user
+ * prompts by the user-prompt hook, both in real time. Nothing is left to
+ * flush at session end, so this hook performs no network I/O: it only
+ * writes a local activity summary for the next session-start to read.
+ *
+ * This matters because Claude Code hard-kills SessionEnd hooks during
+ * teardown (especially on prompt_input_exit) — fast enough that even the
+ * first API round trip is cut off. The previous implementation fought this
+ * with signal traps and a cooldown animation, which (a) produced the
+ * "Hook cancelled" error when the kill won the race anyway, and (b) on the
+ * rare occasion it did complete, re-uploaded assistant messages the Stop
+ * hook had already saved, duplicating them. Going local-only removes both
+ * problems: the hook finishes in milliseconds with nothing to cancel.
  */
 export async function handleSessionEnd(): Promise<void> {
   const config = loadConfig();
@@ -231,107 +237,11 @@ export async function handleSessionEnd(): Promise<void> {
   );
   saveClaudeLocalContext(newSummary + recentActivity);
 
-  // =========================================================
-  // Phase 2: PARALLEL API UPLOADS + ANIMATION
-  // Cooldown animation runs concurrently with network I/O
-  // so we don't waste budget on cosmetics before critical work.
-  // =========================================================
-  try {
-    const honcho = new Honcho(getHonchoClientOptions(config));
-
-    const [session, aiPeer] = await Promise.all([
-      honcho.session(sessionName),
-      honcho.peer(config.aiPeer),
-    ]);
-
-    logHook("session-end", `Processing ${assistantMessages.length} assistant msgs`);
-
-    const aiMessages = (config.saveMessages !== false && assistantMessages.length > 0)
-      ? assistantMessages.flatMap((msg) => {
-          const chunks = chunkContent(msg.content);
-          return chunks.map(chunk =>
-            aiPeer.message(chunk, {
-              createdAt: msg.timestamp,
-              metadata: {
-                instance_id: instanceId || undefined,
-                type: msg.isMeaningful ? 'assistant_prose' : 'assistant_brief',
-                meaningful: msg.isMeaningful || false,
-                session_affinity: sessionName,
-              },
-            })
-          );
-        })
-      : [];
-
-    const endMarker = aiPeer.message(
-      `[Session ended] Reason: ${reason}, Messages: ${transcriptMessages.length}, Time: ${new Date().toISOString()}`,
-      {
-        createdAt: new Date().toISOString(),
-        metadata: {
-          instance_id: instanceId || undefined,
-          session_affinity: sessionName,
-        },
-      }
-    );
-
-    // Single addMessages call with everything — one round trip instead of three.
-    const allMessages = [...aiMessages, endMarker];
-
-    if (allMessages.length > 0) {
-      const meaningfulCount = assistantMessages.filter(m => m.isMeaningful).length;
-      logApiCall("session.addMessages", "POST",
-        `${aiMessages.length} assistant (${meaningfulCount} meaningful) + 1 marker`);
-
-      // Start API upload immediately; run animation concurrently.
-      const uploadPromise = session.addMessages(allMessages);
-
-      // Trap SIGTERM/SIGINT to prevent default termination while upload
-      // is in flight. The handler is a no-op — its only purpose is to
-      // keep the process alive. Cooldown's own exit handler cleans up
-      // the cursor if the process exits unexpectedly.
-      const sigHandler = () => {};
-      process.on("SIGINT", sigHandler);
-      if (process.platform === "win32") {
-        process.on("SIGBREAK", sigHandler);
-      } else {
-        process.on("SIGTERM", sigHandler);
-      }
-
-      const removeSigHandlers = () => {
-        process.removeListener("SIGINT", sigHandler);
-        if (process.platform === "win32") {
-          process.removeListener("SIGBREAK", sigHandler);
-        } else {
-          process.removeListener("SIGTERM", sigHandler);
-        }
-      };
-
-      // Hard safety net: if the upload hangs beyond SDK timeout + margin,
-      // force exit. Local summary was already saved in phase 1.
-      const hardTimeout = setTimeout(() => {
-        logHook("session-end", "Hard timeout reached — forcing exit");
-        removeSigHandlers();
-        process.exit(0);
-      }, 12_000);
-      hardTimeout.unref();
-
-      await Promise.all([
-        uploadPromise.finally(() => {
-          clearTimeout(hardTimeout);
-          removeSigHandlers();
-        }),
-        playCooldown("saving memory"),
-      ]);
-    } else {
-      await playCooldown("saving memory");
-    }
-
-    const meaningfulCount = assistantMessages.filter(m => m.isMeaningful).length;
-    logHook("session-end", `Session saved: ${assistantMessages.length} assistant msgs (${meaningfulCount} meaningful)`);
-    process.exit(0);
-  } catch (error) {
-    logHook("session-end", `Error: ${error}`, { error: String(error) });
-    // Local summary was already saved in phase 1 — not a total loss.
-    process.exit(0);
-  }
+  const meaningfulCount = assistantMessages.filter((m) => m.isMeaningful).length;
+  logHook(
+    "session-end",
+    `Local summary saved (${assistantMessages.length} assistant msgs, ${meaningfulCount} meaningful); real-time uploads already persisted`,
+    { reason },
+  );
+  process.exit(0);
 }
