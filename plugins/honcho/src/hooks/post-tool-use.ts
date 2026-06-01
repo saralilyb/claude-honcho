@@ -22,8 +22,8 @@ function shouldLogTool(toolName: string, toolInput: Record<string, any>): boolea
 
   if (toolName === "Bash") {
     const command = toolInput.command || "";
-    // Skip read-only or trivial bash commands
-    const trivialCommands = ["ls", "pwd", "echo", "cat", "head", "tail", "which", "type", "git status", "git log", "git diff"];
+    // Skip read-only / navigation commands that carry no memory signal.
+    const trivialCommands = ["cd", "ls", "pwd", "echo", "cat", "head", "tail", "which", "type", "git status", "git log", "git diff"];
     if (trivialCommands.some((cmd) => command.trim().startsWith(cmd))) {
       return false;
     }
