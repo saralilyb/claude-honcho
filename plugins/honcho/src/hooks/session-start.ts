@@ -106,12 +106,14 @@ export async function handleSessionStart(): Promise<void> {
     setCachedSessionId(cwd, sessionName, session.id, claudeInstanceId);
 
     // Step 4: Add peers to session (materializes session server-side).
-    // Peer defaults (observeMe, observeOthers) are managed server-side —
-    // configure them via API or on app.honcho.dev. We only override observeOthers
-    // for the AI peer in directional mode so it can observe the user.
+    // In directional mode we set the full per-session observation directionality
+    // explicitly: the user self-observes (observeMe) but does not model the AI
+    // (observeOthers:false), while the AI observes the user (observeOthers:true)
+    // without self-observing its own assistant/tool output (observeMe:false).
+    // In unified mode we leave both peers at server-side defaults.
     const observationMode = getObservationMode(config);
     const peers: Parameters<typeof session.addPeers>[0] = writesAsDirectional(observationMode)
-      ? [userPeer, [aiPeer, { observeOthers: true }]]
+      ? [[userPeer, { observeMe: true, observeOthers: false }], [aiPeer, { observeMe: false, observeOthers: true }]]
       : [userPeer, aiPeer];
     await session.addPeers(peers);
 
