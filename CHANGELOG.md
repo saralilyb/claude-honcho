@@ -10,6 +10,7 @@ All notable changes to claude-honcho will be documented in this file.
 
 ### Fixed
 
+- Directional observation mode now sets the full per-session directionality on both peers: the user self-observes but does not model the AI (`observeMe:true, observeOthers:false`), and the AI observes the user without self-observing its own assistant/tool output (`observeMe:false, observeOthers:true`). Previously only the AI peer's `observeOthers` was set, leaving its `observeMe` at the Honcho default (`true`) so it self-observed.
 - Eliminated a duplication bug where repeated `SessionEnd` failures (12s timeout, double-fire) caused queued prompts to be re-uploaded indefinitely.
 
 ### Removed
