@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "fs";
 import { getInstanceIdForCwd } from "../cache.js";
 import { logHook, logApiCall, setLogContext } from "../log.js";
 import { visStopMessage } from "../visual.js";
+import { enqueueOutbox } from "../outbox.js";
 
 interface HookInput {
   session_id?: string;
@@ -168,6 +169,22 @@ export async function handleStop(): Promise<void> {
     visStopMessage("out", `saved response (${lastMessage.length} chars)`);
   } catch (error) {
     logHook("stop", `Upload failed: ${error}`, { error: String(error) });
+    // Host unreachable — queue the response rather than drop it.
+    const queuedAt = new Date().toISOString();
+    enqueueOutbox([
+      {
+        sessionName,
+        peerName: config.aiPeer,
+        content: lastMessage.slice(0, 3000),
+        metadata: {
+          instance_id: instanceId || undefined,
+          type: "assistant_response",
+          session_affinity: sessionName,
+        },
+        createdAt: queuedAt,
+        queuedAt,
+      },
+    ]);
   }
 
   process.exit(0);

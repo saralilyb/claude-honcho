@@ -15,6 +15,7 @@ import {
 import { logHook, logApiCall, logCache, setLogContext } from "../log.js";
 import { visContextLine, visSkipMessage, addSystemMessage, verboseApiResult, verboseList } from "../visual.js";
 import { honchoSessionUrl } from "../styles.js";
+import { enqueueOutbox } from "../outbox.js";
 
 interface HookInput {
   prompt?: string;
@@ -139,6 +140,22 @@ export async function handleUserPrompt(): Promise<void> {
       await session.addMessages(messages);
     } catch (e) {
       logHook("user-prompt", `Upload failed: ${e}`);
+      // Host unreachable — queue the prompt locally instead of dropping it.
+      // Drained at the next SessionStart once the host is back.
+      const queuedAt = new Date().toISOString();
+      enqueueOutbox(
+        chunkContent(prompt).map((chunk) => ({
+          sessionName,
+          peerName: config.peerName,
+          content: chunk,
+          metadata: {
+            instance_id: instanceId || undefined,
+            session_affinity: sessionName,
+          },
+          createdAt: queuedAt,
+          queuedAt,
+        })),
+      );
     }
   }
 

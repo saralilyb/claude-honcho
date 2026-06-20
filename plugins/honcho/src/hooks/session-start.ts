@@ -13,6 +13,7 @@ import { Spinner } from "../spinner.js";
 import { captureGitState, getRecentCommits, isGitRepo, inferFeatureContext } from "../git.js";
 import { logHook, logApiCall, logCache, logFlow, logAsync, setLogContext } from "../log.js";
 import { verboseApiResult, verboseList, clearVerboseLog } from "../visual.js";
+import { drainOutbox } from "../outbox.js";
 
 
 interface HookInput {
@@ -116,6 +117,16 @@ export async function handleSessionStart(): Promise<void> {
       ? [[userPeer, { observeMe: true, observeOthers: false }], [aiPeer, { observeMe: false, observeOthers: true }]]
       : [userPeer, aiPeer];
     await session.addPeers(peers);
+
+    // Host is reachable (session + peers just set up), so flush anything that
+    // was dropped while it was down. Time-boxed; unsent stays queued for the
+    // next SessionStart. Decoupled from any teardown hook by design.
+    await drainOutbox(
+      honcho,
+      claudeInstanceId ?? sessionName,
+      (m) => logHook("session-start", m),
+      { timeBudgetMs: 8000 },
+    ).catch((e) => logHook("session-start", `outbox drain failed: ${e}`));
 
     // Only persist session names for per-directory strategy (stable names).
     // Dynamic strategies (git-branch, chat-instance) change per session,
