@@ -271,7 +271,7 @@ Controls how Honcho stores and retrieves conclusions about you. Change it via `s
 | `unified` (default) | All agents write to your self-observation collection (`observer=you, observed=you`). Conclusions are portable — switch between Claude, Hermes, or any agent without losing memory. | Most users, when you want to build a unified context hub, agent-switching |
 | `directional` | Each AI peer keeps its own separate view of you (`observer=aiPeer, observed=you`). Claude's observations stay with Claude, Hermes' with Hermes. | Multi-peer workspaces where you want isolated per-peer(agent) representations |
 
-> **Peer defaults:** The plugin does not explicitly set `observeMe` or `observeOthers` on peers — it uses the server-side defaults. If you want to change how a peer observes (e.g., disable self-observation), update the peer's defaults via API or on [app.honcho.dev](https://app.honcho.dev). The only override the plugin applies is `observeOthers: true` on the AI peer in `directional` mode.
+> **Peer config the plugin sets:** In `unified` mode both peers are added with no explicit observation config (server-side defaults apply). In `directional` (and `hybrid`) mode the plugin sets **all four** booleans explicitly at session start — you as `{observeMe: true, observeOthers: false}` and the AI peer as `{observeMe: false, observeOthers: true}` (`src/hooks/session-start.ts`). To change peer observation beyond this, use the API or [app.honcho.dev](https://app.honcho.dev).
 
 To change:
 
@@ -570,7 +570,7 @@ upstream. It carries a handful of local patches on top of `upstream/main`.
 
 ### Current state
 
-- **Plugin version:** `0.2.7` (local; upstream's last release on this line was 0.2.5).
+- **Plugin version:** `0.2.10` (local; upstream's last release on this line was 0.2.5).
 - **Active hooks:** `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PreCompact`,
   `Stop`. There is **no `SessionEnd` hook** (removed — see below).
 - **Honcho topology:** Honcho is **not** self-hosted on the laptop. It runs on a
@@ -578,16 +578,55 @@ upstream. It carries a handful of local patches on top of `upstream/main`.
   proxy hop to that host. Every Honcho call crosses the tailnet.
 - **Persistence model:** all memory is written to Honcho in **real time** — the
   `UserPromptSubmit` hook uploads each prompt, the `Stop` hook uploads each
-  assistant turn. Uploads are best-effort (`maxRetries: 0`, no local queue): if
-  the tailnet hop is unreachable, that message is dropped, not retried. Acceptable
-  because the link to the Honcho host is reliable in practice.
+  assistant turn. Real-time uploads are best-effort (`maxRetries: 0`, no SDK
+  queue), but as of **0.2.10** a failed upload is no longer dropped: when the
+  tailnet hop is unreachable the prompt/stop hooks append the message to
+  `~/.honcho/outbox.jsonl`, and `SessionStart` drains the queue once the host is
+  confirmed reachable (see the outbox patch below). `PostToolUse` observations
+  are intentionally not queued.
 - **Local config** (`~/.honcho/config.json`): workspace `Iris`, peer `Sara`,
   AI peer `claude`, `observationMode: directional`.
+
+### Two Honcho stacks — don't cross-edit them
+
+This machine runs **two independent Honcho integrations**. They read different
+files and must be configured separately:
+
+- **This plugin (Claude Code)** reads **only** `~/.honcho/config.json`
+  (`plugins/honcho/src/config.ts`). That is the *only* file to touch when
+  configuring Claude Code's memory.
+- **Hermes / Iris (`hestia`)** reads `~/.hermes/honcho.json`, resolving host
+  `hermes`. The `hosts.claude_code` block that exists inside *that* file is
+  **inert for this plugin** — editing it changes nothing for Claude Code. Leave
+  `~/.hermes/honcho.json` to Hermes; `hestia` does not use this plugin.
+
+`observationMode` is **defined oppositely** in the two codebases, so the same
+word produces inverted behavior. For the matrix Sara wants — she self-observes,
+the AI observes her, no reverse, no pooling (`user{me:T,others:F},
+ai{me:F,others:T}`):
+
+| | this plugin | Hermes |
+| --- | --- | --- |
+| value that yields that matrix | `observationMode: directional` | `observationMode: unified` |
+
+- Plugin `directional` → that exact matrix, with the AI reading its own
+  per-agent lens (`src/hooks/session-start.ts`). Plugin `unified` → writes and
+  reads pool onto the user's shared self-spine.
+- Hermes `directional` preset → **all four booleans true** (full mutual
+  observation); Hermes `unified` preset → the matrix above (Hermes's honcho
+  `client.py`, `_OBSERVATION_PRESETS`).
+
+The plugin also folds read/recall routing into `observationMode` and has **no**
+`recallMode`, no granular `observation` object, and no legacy `aiObserve*`
+flags. Hermes splits `recallMode` into its own field and supports a granular
+`observation` object plus legacy flags. **Never copy `observationMode` values
+between the two files** — the word is inverted and the knobs are not 1:1.
 
 ### Local patches (on top of `upstream/main`)
 
 | Commit subject | What it does |
 | --- | --- |
+| `feat(outbox): queue failed uploads and flush at SessionStart` (0.2.10) | When the Honcho host is unreachable, the `UserPromptSubmit`/`Stop` hooks append the dropped message to `~/.honcho/outbox.jsonl` instead of losing it; `SessionStart` drains the queue once the host is back. Atomic claim-by-rename for multi-instance safety; caps at 5 MB / 1000 records / 7 days. Closed the gap that lost ~2 days of messages in the Jun 18–20 tunnel outage. Did **not** take upstream's `b8156bd` revert. |
 | `feat(observation-mode): add 'hybrid' mode` | Adds a third `observationMode` (`hybrid`): directional writes, self-spine reads. **Available but not currently active** — config uses `directional`. |
 | `fix(plugin): make bun PATH robust across launch contexts` | Prefixes hook commands with `PATH=$HOME/.bun/bin:$PATH` and wraps the MCP server in `/bin/sh -c "exec $HOME/.bun/bin/bun …"`, so the plugin works regardless of how the launching shell exported `PATH` (the installer only seeds `~/.zshrc`; Sara runs ksh). |
 | `fix(user-prompt): suppress session link for self-hosted deployments` | Only shows the `app.honcho.dev` session link when `endpoint.type === "production"`. For this self-hosted setup the hosted GUI can't see the data, so the link is hidden. |
